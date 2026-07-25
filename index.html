@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Usporedba OSM shapefileova — nove zgrade</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/shpjs@latest/dist/shp.min.js"></script>
+<style>
+  :root{
+    --bg:#0E2238; --bg-panel:#14304C; --bg-panel-2:#183a5c; --line:#8FD3E8; --line-dim:rgba(143,211,232,0.18);
+    --accent:#E8871E; --text:#EAF2F8; --text-muted:#8FA9C2; --green:#6FCF97; --red:#E85D5D;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      repeating-linear-gradient(0deg, var(--line-dim) 0px, var(--line-dim) 1px, transparent 1px, transparent 40px),
+      repeating-linear-gradient(90deg, var(--line-dim) 0px, var(--line-dim) 1px, transparent 1px, transparent 40px),
+      var(--bg);
+    color:var(--text); font-family:'Inter', sans-serif; padding: 32px 20px 80px; min-height:100vh;
+  }
+  .wrap{ max-width: 1100px; margin: 0 auto; }
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace; color:var(--accent); letter-spacing:.14em;
+    font-size:12px; text-transform:uppercase; display:flex; align-items:center; gap:10px;
+  }
+  .eyebrow::before{ content:""; width:18px; height:1px; background:var(--accent); display:inline-block; }
+  h1{ font-family:'Space Grotesk', sans-serif; font-weight:700; font-size:clamp(28px,5vw,46px); margin:10px 0 6px; }
+  .sub{ color:var(--text-muted); font-size:15px; max-width:70ch; line-height:1.6; }
+
+  .steps{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:28px 0; }
+  @media (max-width:800px){ .steps{ grid-template-columns:1fr; } }
+  .step{ background:var(--bg-panel); border:1px solid var(--line-dim); padding:16px 18px; }
+  .step .n{ font-family:'IBM Plex Mono',monospace; color:var(--accent); font-size:12px; letter-spacing:.1em; }
+  .step h4{ margin:6px 0 4px; font-family:'Space Grotesk',sans-serif; font-size:15px; }
+  .step p{ margin:0; color:var(--text-muted); font-size:13px; line-height:1.5; }
+
+  .panel{ background:var(--bg-panel); border:1px solid var(--line-dim); padding:24px; margin-bottom:20px; }
+  .panel h2{ font-family:'Space Grotesk',sans-serif; font-size:18px; margin:0 0 4px; }
+  .panel .desc{ color:var(--text-muted); font-size:13px; margin-bottom:18px; }
+
+  .dropzones{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:700px){ .dropzones{ grid-template-columns:1fr; } }
+  .dropzone{
+    border:2px dashed var(--line-dim); border-radius:4px; padding:28px 16px; text-align:center;
+    cursor:pointer; transition:border-color .15s, background .15s; position:relative;
+  }
+  .dropzone:hover, .dropzone.dragover{ border-color:var(--line); background:rgba(143,211,232,0.06); }
+  .dropzone.filled{ border-color:var(--green); background:rgba(111,207,151,0.06); }
+  .dropzone .tag{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--line); letter-spacing:.08em; text-transform:uppercase; }
+  .dropzone .fname{ margin-top:8px; font-size:13px; color:var(--text); word-break:break-all; }
+  .dropzone .hint{ margin-top:6px; font-size:12px; color:var(--text-muted); }
+  .dropzone input{ display:none; }
+
+  .btn{
+    font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:14px; border:none; border-radius:3px;
+    padding:12px 22px; cursor:pointer; transition:opacity .15s;
+  }
+  .btn:disabled{ opacity:.4; cursor:not-allowed; }
+  .btn-primary{ background:var(--accent); color:#161616; }
+  .btn-primary:hover:not(:disabled){ opacity:.88; }
+  .btn-ghost{ background:transparent; border:1px dashed var(--line); color:var(--line); }
+  .btn-ghost:hover{ background:rgba(143,211,232,0.08); }
+
+  .field-picker{ display:flex; gap:10px; align-items:center; margin-top:14px; flex-wrap:wrap; }
+  .field-picker select{
+    background:var(--bg); border:1px solid var(--line-dim); color:var(--text); padding:8px 12px;
+    font-family:'IBM Plex Mono',monospace; font-size:13px; border-radius:2px;
+  }
+  .field-picker label{ font-size:13px; color:var(--text-muted); }
+
+  .status-line{ font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--text-muted); margin-top:14px; min-height:20px; }
+  .status-line.err{ color:var(--red); }
+  .status-line.ok{ color:var(--green); }
+
+  .action-row{ display:flex; gap:12px; margin-top:18px; align-items:center; flex-wrap:wrap; }
+
+  /* Rezultati */
+  #results{ display:none; }
+  .hero-results{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:20px 0; }
+  @media (max-width:700px){ .hero-results{ grid-template-columns:1fr; } }
+  .stat{ background:var(--bg-panel); border:1px solid var(--line-dim); padding:16px 18px; position:relative; }
+  .stat::before{ content:attr(data-tag); position:absolute; top:-9px; left:14px; background:var(--bg);
+    padding:0 6px; font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--line); letter-spacing:.08em; }
+  .stat .num{ font-family:'IBM Plex Mono',monospace; font-size:clamp(20px,3vw,28px); font-weight:600; }
+  .stat .lbl{ color:var(--text-muted); font-size:12px; margin-top:4px; }
+  .stat.accent .num{ color:var(--accent); }
+
+  .results-grid{ display:grid; grid-template-columns:260px 1fr; gap:24px; }
+  @media (max-width:800px){ .results-grid{ grid-template-columns:1fr; } }
+  .sidebar{ background:var(--bg-panel); border:1px solid var(--line-dim); padding:16px; align-self:start; position:sticky; top:20px; }
+  .sidebar h3{ font-family:'Space Grotesk',sans-serif; font-size:14px; margin:0 0 10px; color:var(--line); }
+  .logic-toggle{ display:flex; border:1px solid var(--line-dim); border-radius:2px; overflow:hidden; margin-bottom:14px; }
+  .logic-toggle button{ flex:1; background:transparent; border:none; color:var(--text-muted); padding:7px 0;
+    font-family:'IBM Plex Mono',monospace; font-size:12px; cursor:pointer; }
+  .logic-toggle button.active{ background:var(--accent); color:#161616; font-weight:600; }
+  .filter-group{ margin-bottom:14px; border-bottom:1px solid var(--line-dim); padding-bottom:12px; }
+  .filter-group summary{ cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--line); margin-bottom:6px; }
+  .filter-opt{ display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-muted); padding:2px 0; }
+  .filter-opt input{ accent-color:var(--accent); }
+  .filter-opt .fc{ color:var(--text-muted); font-family:'IBM Plex Mono',monospace; font-size:11px; margin-left:auto; }
+  .clear-btn{ width:100%; background:transparent; border:1px dashed var(--line); color:var(--line); padding:7px 0;
+    font-family:'IBM Plex Mono',monospace; font-size:12px; cursor:pointer; border-radius:2px; }
+
+  .controls{ display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap; }
+  input[type=text]{ flex:1; min-width:220px; background:var(--bg-panel); border:1px solid var(--line-dim); color:var(--text);
+    padding:10px 14px; font-family:'Inter',sans-serif; font-size:14px; border-radius:2px; }
+  label.chk{ display:flex; align-items:center; gap:6px; color:var(--text-muted); font-size:13px;
+    background:var(--bg-panel); border:1px solid var(--line-dim); padding:0 14px; border-radius:2px; white-space:nowrap; }
+  .count-line{ color:var(--text-muted); font-size:12px; margin-bottom:10px; font-family:'IBM Plex Mono',monospace; }
+  .list{ border:1px solid var(--line-dim); }
+  .row{ display:grid; grid-template-columns:1fr auto; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line-dim);
+    cursor:pointer; background:var(--bg-panel); }
+  .row:hover{ background:var(--bg-panel-2); }
+  .row .addr{ font-size:14px; }
+  .row .addr.unknown{ color:var(--text-muted); font-style:italic; }
+  .row .nearstreet{ display:block; font-size:11px; color:var(--accent); margin-top:2px; font-family:'IBM Plex Mono',monospace; }
+  .row .id{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--line); align-self:center; }
+  .badge-status{ font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 7px; border-radius:10px; align-self:center; }
+  .badge-new{ background:rgba(232,135,30,0.18); color:var(--accent); }
+  .badge-existing{ background:rgba(143,211,232,0.1); color:var(--line); }
+  .details{ display:none; background:rgba(0,0,0,0.2); padding:14px 16px; border-bottom:1px solid var(--line-dim); }
+  .details.open{ display:block; }
+  .details .tag{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--text-muted); margin-bottom:3px; }
+  .details .tag span{ color:var(--line); }
+  .details a{ color:var(--accent); text-decoration:none; font-family:'IBM Plex Mono',monospace; font-size:12px; }
+  .details a:hover{ text-decoration:underline; }
+  .empty{ padding:30px; text-align:center; color:var(--text-muted); font-family:'IBM Plex Mono',monospace; font-size:13px; }
+  .note{ color:var(--text-muted); font-size:12px; margin-top:18px; line-height:1.6; }
+  .roads-status{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--text-muted); margin-top:10px; }
+  #roadsFallback{ display:none; margin-top:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="eyebrow">OSM SHAPEFILE ALAT · GRAD ZAGREB (ILI BILO KOJE PODRUČJE)</div>
+  <h1>Usporedba dva OSM snimka</h1>
+  <p class="sub">Učitajte dva shapefile snimka zgrada iz različitih trenutaka (npr. Geofabrik ekstrakti preuzeti u razmaku od nekoliko tjedana) i alat će izlistati sve zgrade koje su se pojavile između njih — s adresom (ako postoji), svim OSM podacima, i mogućnošću filtriranja.</p>
+
+  <div class="steps">
+    <div class="step"><span class="n">01</span><h4>Učitajte dva snimka</h4><p>Stariji i noviji shapefile zgrada, svaki zapakiran kao .zip (.shp + .shx + .dbf + .prj zajedno).</p></div>
+    <div class="step"><span class="n">02</span><h4>Alat uspoređuje</h4><p>Sve se radi u vašem pregledniku — datoteke se nigdje ne šalju niti spremaju na server.</p></div>
+    <div class="step"><span class="n">03</span><h4>Pregled i filtriranje</h4><p>Lista novih zgrada s adresom, tagovima i filterima po bilo kojem podatku koji postoji.</p></div>
+  </div>
+
+  <div class="panel" id="uploadPanel">
+    <h2>1. Učitaj dva shapefile snimka</h2>
+    <div class="desc">Svaki shapefile treba biti zapakiran kao .zip (mora sadržavati .shp, .shx, .dbf, po mogućnosti i .prj).</div>
+
+    <div class="dropzones">
+      <div class="dropzone" id="dzOld">
+        <div class="tag">Stariji snimak</div>
+        <div class="fname" id="fnameOld">Klikni ili povuci .zip ovdje</div>
+        <div class="hint">npr. zgrade-2026-01-01.zip</div>
+        <input type="file" id="fileOld" accept=".zip" />
+      </div>
+      <div class="dropzone" id="dzNew">
+        <div class="tag">Noviji snimak</div>
+        <div class="fname" id="fnameNew">Klikni ili povuci .zip ovdje</div>
+        <div class="hint">npr. zgrade-2026-07-25.zip</div>
+        <input type="file" id="fileNew" accept=".zip" />
+      </div>
+    </div>
+
+    <div class="field-picker" id="fieldPicker" style="display:none;">
+      <label>Polje za jedinstveni ID zgrade:</label>
+      <select id="idFieldSelect"></select>
+      <span style="color:var(--text-muted); font-size:12px;">(automatski predložen — promijeni ako nije točno)</span>
+    </div>
+
+    <div class="action-row">
+      <button class="btn btn-primary" id="compareBtn" disabled>Usporedi</button>
+      <span class="status-line" id="statusLine"></span>
+    </div>
+  </div>
+
+  <div id="results">
+    <div class="panel" style="margin-bottom:20px;">
+      <h2>2. Rezultat usporedbe</h2>
+      <div class="desc" id="resultDesc"></div>
+      <div class="hero-results">
+        <div class="stat accent" data-tag="NOVO"><div class="num" id="statTotal">—</div><div class="lbl">novih zgrada</div></div>
+        <div class="stat" data-tag="UKUPNO NOVIJI" ><div class="num" id="statNewTotal">—</div><div class="lbl">zgrada u novijem snimku</div></div>
+        <div class="stat" data-tag="ADRESA/PODACI"><div class="num" id="statAddr">—</div><div class="lbl">novih zgrada s prepoznatom adresom</div></div>
+      </div>
+      <div class="roads-status" id="roadsStatus"></div>
+      <div id="roadsFallback">
+        <div class="desc">Automatski dohvat cesta nije uspio (javni servis je možda trenutno zauzet). Možete ručno učitati shapefile cesta (npr. <code>gis_osm_roads_free_1</code>) da omogućite prikaz najbliže ulice:</div>
+        <div class="dropzone" id="dzRoads" style="max-width:400px;">
+          <div class="tag">Shapefile cesta (opcionalno)</div>
+          <div class="fname" id="fnameRoads">Klikni ili povuci .zip ovdje</div>
+          <input type="file" id="fileRoads" accept=".zip" />
+        </div>
+      </div>
+    </div>
+
+    <div class="results-grid">
+      <div class="sidebar">
+        <h3>Filteri po podacima</h3>
+        <div class="logic-toggle">
+          <button id="logicAnd" class="active">I (mora sve)</button>
+          <button id="logicOr">ILI (barem jedno)</button>
+        </div>
+        <div id="filterGroups"></div>
+        <button class="clear-btn" id="clearFilters">Očisti filtere</button>
+      </div>
+
+      <div class="main">
+        <div class="controls">
+          <input type="text" id="searchBox" placeholder="Pretraži po adresi, ulici ili ID-ju..." />
+          <label class="chk"><input type="checkbox" id="onlyNew" checked /> Samo nove zgrade</label>
+        </div>
+        <div class="count-line" id="countLine"></div>
+        <div class="list" id="list"></div>
+      </div>
+    </div>
+
+    <p class="note">"Novo" znači da zgrada postoji u novijem snimku a nije postojala (isti ID) u starijem — ne nužno novoizgrađeno u stvarnosti, ovisi kad je netko unio podatak u OSM. Ako adresa nije upisana u OSM-u, prikazuje se najbliža imenovana ulica kao procjena lokacije, ne stvarna adresa.</p>
+  </div>
+
+</div>
+
+<script>
+/* ---------- Pomocne funkcije ---------- */
+
+function setStatus(msg, cls){
+  const el = document.getElementById('statusLine');
+  el.textContent = msg;
+  el.className = 'status-line' + (cls ? ' ' + cls : '');
+}
+
+function setupDropzone(zoneId, inputId, fnameId, onFile){
+  const zone = document.getElementById(zoneId);
+  const input = document.getElementById(inputId);
+  const fname = document.getElementById(fnameId);
+  zone.addEventListener('click', () => input.click());
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('dragover');
+    if(e.dataTransfer.files.length){ input.files = e.dataTransfer.files; handleChange(); }
+  });
+  input.addEventListener('change', handleChange);
+  function handleChange(){
+    if(!input.files.length) return;
+    const file = input.files[0];
+    fname.textContent = file.name;
+    zone.classList.add('filled');
+    onFile(file);
+  }
+}
+
+let oldGeojson = null, newGeojson = null, roadsGeojson = null;
+let idField = null;
+let comparedResults = null; // { features: [...], addressField info }
+
+async function parseShapefileZip(file){
+  const buf = await file.arrayBuffer();
+  const result = await shp(buf);
+  // shpjs moze vratiti FeatureCollection ili niz njih (vise slojeva u zipu) - uzimamo prvi/najveci
+  if(Array.isArray(result)){
+    result.sort((a,b) => (b.features?.length||0) - (a.features?.length||0));
+    return result[0];
+  }
+  return result;
+}
+
+function collectPropertyKeys(geojson){
+  const keys = new Set();
+  geojson.features.forEach(f => Object.keys(f.properties || {}).forEach(k => keys.add(k)));
+  return [...keys];
+}
+
+function guessIdField(keys){
+  const candidates = ['osm_id','OSM_ID','osm_ID','id','ID','fid','FID'];
+  for(const c of candidates){ if(keys.includes(c)) return c; }
+  return keys[0] || null;
+}
+
+/* ---------- Upload handling ---------- */
+
+setupDropzone('dzOld','fileOld','fnameOld', async (file) => {
+  setStatus('Učitavam stariji shapefile...');
+  try{
+    oldGeojson = await parseShapefileZip(file);
+    setStatus(`Stariji snimak: ${oldGeojson.features.length} objekata učitano.`, 'ok');
+    maybeShowFieldPicker();
+    checkReady();
+  }catch(e){
+    setStatus('Greška pri čitanju starijeg shapefilea: ' + e.message, 'err');
+    console.error(e);
+  }
+});
+
+setupDropzone('dzNew','fileNew','fnameNew', async (file) => {
+  setStatus('Učitavam noviji shapefile...');
+  try{
+    newGeojson = await parseShapefileZip(file);
+    setStatus(`Noviji snimak: ${newGeojson.features.length} objekata učitano.`, 'ok');
+    maybeShowFieldPicker();
+    checkReady();
+  }catch(e){
+    setStatus('Greška pri čitanju novijeg shapefilea: ' + e.message, 'err');
+    console.error(e);
+  }
+});
+
+function maybeShowFieldPicker(){
+  if(!newGeojson) return;
+  const keys = collectPropertyKeys(newGeojson);
+  const select = document.getElementById('idFieldSelect');
+  select.innerHTML = keys.map(k => `<option value="${k}">${k}</option>`).join('');
+  const guess = guessIdField(keys);
+  if(guess) select.value = guess;
+  idField = select.value;
+  select.onchange = () => { idField = select.value; };
+  document.getElementById('fieldPicker').style.display = 'flex';
+}
+
+function checkReady(){
+  document.getElementById('compareBtn').disabled = !(oldGeojson && newGeojson);
+}
+
+document.getElementById('compareBtn').addEventListener('click', runComparison);
+
+/* ---------- Usporedba ---------- */
+
+function findAddress(props){
+  // Pokrivamo raznolike konvencije naziva polja (OSM tag stil, shapefile stil s podvlakom, kratice)
+  const get = (patterns) => {
+    for(const key of Object.keys(props)){
+      const lk = key.toLowerCase().replace(/[:_]/g,'');
+      for(const p of patterns){ if(lk === p || lk.includes(p)) return props[key]; }
+    }
+    return null;
+  };
+  const street = get(['addrstreet','street']);
+  const hn = get(['addrhousenumber','addrhn','housenumber']);
+  const city = get(['addrcity','city']) || '';
+  if(street){
+    return [`${street}${hn ? ' ' + hn : ''}`, city].filter(Boolean).join(', ');
+  }
+  return null;
+}
+
+function bboxOf(geojson){
+  let minLat=90, maxLat=-90, minLon=180, maxLon=-180;
+  function walk(coords, depth){
+    if(depth === 0){ // [lon, lat]
+      const [lon, lat] = coords;
+      if(lat < minLat) minLat = lat; if(lat > maxLat) maxLat = lat;
+      if(lon < minLon) minLon = lon; if(lon > maxLon) maxLon = lon;
+    } else {
+      coords.forEach(c => walk(c, depth - 1));
+    }
+  }
+  geojson.features.forEach(f => {
+    const g = f.geometry;
+    if(!g) return;
+    const depth = g.type === 'Polygon' ? 2 : g.type === 'MultiPolygon' ? 3 : g.type === 'Point' ? 0 : 1;
+    walk(g.coordinates, depth);
+  });
+  return { minLat, maxLat, minLon, maxLon };
+}
+
+function centroidOf(geometry){
+  let pts = [];
+  if(geometry.type === 'Polygon') pts = geometry.coordinates[0];
+  else if(geometry.type === 'MultiPolygon') pts = geometry.coordinates[0][0];
+  else if(geometry.type === 'Point') pts = [geometry.coordinates];
+  if(!pts.length) return [null, null];
+  let lon = 0, lat = 0;
+  pts.forEach(p => { lon += p[0]; lat += p[1]; });
+  return [lat / pts.length, lon / pts.length];
+}
+
+async function runComparison(){
+  setStatus('Uspoređujem...', '');
+  document.getElementById('compareBtn').disabled = true;
+
+  const oldIds = new Set(oldGeojson.features.map(f => String(f.properties[idField])));
+
+  const features = newGeojson.features.map(f => {
+    const id = String(f.properties[idField]);
+    const status = oldIds.has(id) ? 'existing' : 'new';
+    const [lat, lon] = centroidOf(f.geometry);
+    return { id, status, props: f.properties, lat, lon, address: findAddress(f.properties) };
+  });
+
+  const newCount = features.filter(f => f.status === 'new').length;
+  const withAddr = features.filter(f => f.status === 'new' && f.address).length;
+
+  comparedResults = { features };
+
+  document.getElementById('resultDesc').textContent =
+    `${oldGeojson.features.length.toLocaleString('hr-HR')} objekata u starijem snimku, ${newGeojson.features.length.toLocaleString('hr-HR')} u novijem. Podudaranje po polju "${idField}".`;
+  document.getElementById('statTotal').textContent = newCount.toLocaleString('hr-HR');
+  document.getElementById('statNewTotal').textContent = newGeojson.features.length.toLocaleString('hr-HR');
+  document.getElementById('statAddr').textContent = withAddr.toLocaleString('hr-HR');
+
+  document.getElementById('results').style.display = 'block';
+  document.getElementById('results').scrollIntoView({ behavior:'smooth' });
+  setStatus(`Gotovo. ${newCount} novih zgrada.`, 'ok');
+
+  buildFilters(features);
+  render();
+
+  // Pokusaj automatskog dohvata cesta za "najblizu ulicu" (samo za nove zgrade bez adrese)
+  const needRoads = features.some(f => f.status === 'new' && !f.address);
+  if(needRoads){
+    document.getElementById('roadsStatus').textContent = 'Dohvaćam podatke o cestama za prikaz najbliže ulice...';
+    try{
+      const bbox = bboxOf(newGeojson);
+      roadsGeojson = await fetchRoadsAuto(bbox);
+      computeNearestStreets(features, roadsGeojson);
+      document.getElementById('roadsStatus').textContent = `Ceste uspješno dohvaćene (${roadsGeojson.features.length} segmenata) — najbliža ulica prikazana za zgrade bez adrese.`;
+      render();
+    }catch(e){
+      console.error(e);
+      document.getElementById('roadsStatus').textContent = 'Automatski dohvat cesta nije uspio.';
+      document.getElementById('roadsFallback').style.display = 'block';
+      setupDropzone('dzRoads','fileRoads','fnameRoads', async (file) => {
+        try{
+          roadsGeojson = await parseShapefileZip(file);
+          computeNearestStreets(features, roadsGeojson);
+          document.getElementById('roadsStatus').textContent = `Ceste učitane iz vašeg filea (${roadsGeojson.features.length} objekata) — najbliža ulica prikazana.`;
+          render();
+        }catch(err){
+          document.getElementById('roadsStatus').textContent = 'Greška pri čitanju shapefilea cesta: ' + err.message;
+        }
+      });
+    }
+  }
+}
+
+/* ---------- Automatski dohvat cesta (Overpass, s rezervnim mirrorima) ---------- */
+
+async function fetchRoadsAuto(bbox){
+  const mirrors = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+  ];
+  const query = `[out:json][timeout:30];way["highway"]["name"](${bbox.minLat},${bbox.minLon},${bbox.maxLat},${bbox.maxLon});out geom;`;
+  let lastErr;
+  for(const mirror of mirrors){
+    try{
+      const resp = await fetch(mirror, {
+        method: 'POST',
+        body: 'data=' + encodeURIComponent(query),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
+      if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      const body = await resp.json();
+      const features = (body.elements || []).map(el => ({
+        name: el.tags?.name,
+        points: (el.geometry || []).map(p => [p.lat, p.lon]),
+      })).filter(r => r.name && r.points.length);
+      if(!features.length) throw new Error('Prazan odgovor');
+      return { features };
+    }catch(e){ lastErr = e; }
+  }
+  throw lastErr || new Error('Nepoznata greška');
+}
+
+function haversineM(lat1, lon1, lat2, lon2){
+  const R = 6371000;
+  const p1 = lat1*Math.PI/180, p2 = lat2*Math.PI/180;
+  const dphi = (lat2-lat1)*Math.PI/180, dlambda = (lon2-lon1)*Math.PI/180;
+  const a = Math.sin(dphi/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dlambda/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+
+function computeNearestStreets(features, roads){
+  // Jednostavan grid-bucket index za brzu pretragu (bez vanjskih biblioteka)
+  const CELL = 0.003; // ~300m
+  const grid = {};
+  function cellKey(lat, lon){ return Math.floor(lat/CELL) + '_' + Math.floor(lon/CELL); }
+  roads.features.forEach(r => {
+    r.points.forEach(([lat, lon]) => {
+      const key = cellKey(lat, lon);
+      if(!grid[key]) grid[key] = [];
+      grid[key].push([lat, lon, r.name]);
+    });
+  });
+  features.forEach(f => {
+    if(f.status !== 'new' || f.address || f.lat == null) return;
+    const cLat = Math.floor(f.lat/CELL), cLon = Math.floor(f.lon/CELL);
+    let best = null, bestDist = Infinity;
+    for(let dl=-2; dl<=2; dl++){
+      for(let dn=-2; dn<=2; dn++){
+        const key = (cLat+dl) + '_' + (cLon+dn);
+        const pts = grid[key];
+        if(!pts) continue;
+        pts.forEach(([lat,lon,name]) => {
+          const d = haversineM(f.lat, f.lon, lat, lon);
+          if(d < bestDist){ bestDist = d; best = name; }
+        });
+      }
+    }
+    if(best){ f.nearestStreet = best; f.nearestStreetDist = Math.round(bestDist); }
+  });
+}
+
+/* ---------- Filteri ---------- */
+
+const PRIORITY_KEYS = ['building','type','fclass','building:levels','house','roof:shape'];
+let activeFilters = {};
+let logicMode = 'AND';
+
+function buildFilters(features){
+  activeFilters = {};
+  const tagCounts = {};
+  features.forEach(f => {
+    Object.entries(f.props || {}).forEach(([k,v]) => {
+      const lk = k.toLowerCase();
+      if(lk.includes('addr') || v === null || v === '') return;
+      if(!tagCounts[k]) tagCounts[k] = {};
+      tagCounts[k][v] = (tagCounts[k][v]||0) + 1;
+    });
+  });
+  const keysToShow = [
+    ...PRIORITY_KEYS.filter(k => tagCounts[k]),
+    ...Object.keys(tagCounts).filter(k => !PRIORITY_KEYS.includes(k) &&
+      Object.values(tagCounts[k]).some(c => c >= 3)).sort()
+  ];
+  const container = document.getElementById('filterGroups');
+  container.innerHTML = '';
+  keysToShow.slice(0,12).forEach(key => {
+    const values = Object.entries(tagCounts[key]).sort((a,b)=>b[1]-a[1]).slice(0,10);
+    const details = document.createElement('details');
+    details.className = 'filter-group';
+    const summary = document.createElement('summary');
+    summary.textContent = key;
+    details.appendChild(summary);
+    values.forEach(([val,count]) => {
+      const label = document.createElement('label');
+      label.className = 'filter-opt';
+      label.innerHTML = `<input type="checkbox" data-key="${key}" data-val="${val}"> ${val} <span class="fc">${count}</span>`;
+      details.appendChild(label);
+    });
+    container.appendChild(details);
+  });
+  container.onchange = e => {
+    if(e.target.type !== 'checkbox') return;
+    const key = e.target.dataset.key, val = e.target.dataset.val;
+    if(!activeFilters[key]) activeFilters[key] = new Set();
+    if(e.target.checked) activeFilters[key].add(val); else activeFilters[key].delete(val);
+    if(activeFilters[key].size === 0) delete activeFilters[key];
+    render();
+  };
+}
+
+document.getElementById('logicAnd').onclick = () => { logicMode='AND';
+  document.getElementById('logicAnd').classList.add('active');
+  document.getElementById('logicOr').classList.remove('active'); render(); };
+document.getElementById('logicOr').onclick = () => { logicMode='OR';
+  document.getElementById('logicOr').classList.add('active');
+  document.getElementById('logicAnd').classList.remove('active'); render(); };
+document.getElementById('clearFilters').onclick = () => {
+  activeFilters = {};
+  document.querySelectorAll('#filterGroups input[type=checkbox]').forEach(cb => cb.checked=false);
+  render();
+};
+
+function matchesFilters(f){
+  const keys = Object.keys(activeFilters);
+  if(!keys.length) return true;
+  const checks = keys.map(k => activeFilters[k].has(String(f.props[k])));
+  return logicMode === 'AND' ? checks.every(Boolean) : checks.some(Boolean);
+}
+
+/* ---------- Render liste ---------- */
+
+const searchBox = document.getElementById('searchBox');
+const onlyNew = document.getElementById('onlyNew');
+searchBox.addEventListener('input', render);
+onlyNew.addEventListener('change', render);
+
+function render(){
+  if(!comparedResults) return;
+  const q = searchBox.value.trim().toLowerCase();
+  const filterNew = onlyNew.checked;
+  let filtered = comparedResults.features.filter(f => {
+    if(filterNew && f.status !== 'new') return false;
+    if(!matchesFilters(f)) return false;
+    if(!q) return true;
+    return (f.address && f.address.toLowerCase().includes(q)) ||
+           (f.nearestStreet && f.nearestStreet.toLowerCase().includes(q)) ||
+           f.id.toLowerCase().includes(q);
+  });
+  document.getElementById('countLine').textContent =
+    `Prikazano ${filtered.length.toLocaleString('hr-HR')} od ${comparedResults.features.length.toLocaleString('hr-HR')}`;
+
+  const listEl = document.getElementById('list');
+  if(!filtered.length){
+    listEl.innerHTML = '<div class="empty">Nema rezultata za zadani filter.</div>';
+    return;
+  }
+  const MAX = 500;
+  const toRender = filtered.slice(0, MAX);
+  listEl.innerHTML = toRender.map((f, idx) => {
+    let addrHtml;
+    if(f.address) addrHtml = `<span class="addr">${f.address}</span>`;
+    else if(f.nearestStreet) addrHtml = `<span class="addr unknown">adresa nepoznata</span><span class="nearstreet">≈ ${f.nearestStreetDist} m od: ${f.nearestStreet} (procjena)</span>`;
+    else addrHtml = `<span class="addr unknown">adresa nepoznata</span>`;
+    const badge = f.status === 'new' ? '<span class="badge-status badge-new">NOVO</span>' : '<span class="badge-status badge-existing">postojeća</span>';
+    const tagsHtml = Object.entries(f.props||{}).map(([k,v]) => `<div class="tag"><span>${k}</span> = ${v}</div>`).join('');
+    const mapLink = (f.lat != null) ? `<a href="https://www.openstreetmap.org/?mlat=${f.lat}&mlon=${f.lon}#map=19/${f.lat}/${f.lon}" target="_blank" rel="noopener">Otvori na OSM karti ↗</a>` : '';
+    return `
+      <div class="row" onclick="document.getElementById('d-${idx}').classList.toggle('open')">
+        ${addrHtml}
+        <div style="display:flex; gap:8px;">${badge}<span class="id">${f.id}</span></div>
+      </div>
+      <div class="details" id="d-${idx}">${mapLink}<div style="margin-top:8px;">${tagsHtml}</div></div>
+    `;
+  }).join('');
+  if(filtered.length > MAX){
+    listEl.innerHTML += `<div class="empty">Prikazano prvih ${MAX} od ${filtered.length}. Suzite pretragu ili filtere.</div>`;
+  }
+}
+</script>
+</body>
+</html>
