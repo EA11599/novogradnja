@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/shpjs@latest/dist/shp.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mapbox/shp-write@0.3.4/shpwrite.js"></script>
 <style>
   :root{
     --bg:#0E2238; --bg-panel:#14304C; --bg-panel-2:#183a5c; --line:#8FD3E8; --line-dim:rgba(143,211,232,0.18);
@@ -187,6 +188,11 @@
         <div class="stat" data-tag="ADRESA/PODACI"><div class="num" id="statAddr">—</div><div class="lbl">novih zgrada s prepoznatom adresom</div></div>
       </div>
       <div class="roads-status" id="roadsStatus"></div>
+      <div class="action-row" style="margin-top:14px;">
+        <button class="btn btn-primary" id="downloadShpBtn">Preuzmi shapefile (sve zgrade + status)</button>
+        <button class="btn btn-ghost" id="downloadGeojsonBtn">Preuzmi GeoJSON</button>
+        <span class="status-line" id="downloadStatus"></span>
+      </div>
       <div id="roadsFallback">
         <div class="desc">Automatski dohvat cesta nije uspio (javni servis je možda trenutno zauzet). Možete ručno učitati shapefile cesta (npr. <code>gis_osm_roads_free_1</code>) da omogućite prikaz najbliže ulice:</div>
         <div class="dropzone" id="dzRoads" style="max-width:400px;">
@@ -387,7 +393,7 @@ async function runComparison(){
     const id = String(f.properties[idField]);
     const status = oldIds.has(id) ? 'existing' : 'new';
     const [lat, lon] = centroidOf(f.geometry);
-    return { id, status, props: f.properties, lat, lon, address: findAddress(f.properties) };
+    return { id, status, props: f.properties, lat, lon, address: findAddress(f.properties), geometry: f.geometry };
   });
 
   const newCount = features.filter(f => f.status === 'new').length;
@@ -504,7 +510,60 @@ function computeNearestStreets(features, roads){
   });
 }
 
-/* ---------- Filteri ---------- */
+/* ---------- Preuzimanje rezultata (shapefile / GeoJSON) ---------- */
+
+function explodeMultiPolygons(features){
+  // shp-write ne podrzava MultiPolygon pouzdano - razbijamo svaki dio u zaseban Polygon zapis
+  const out = [];
+  features.forEach(f => {
+    if(!f.geometry) return;
+    if(f.geometry.type === 'MultiPolygon'){
+      f.geometry.coordinates.forEach(polyCoords => {
+        out.push({ type:'Feature', geometry:{type:'Polygon', coordinates:polyCoords}, properties:{...f.props, osm_id:f.id, status:f.status} });
+      });
+    } else if(f.geometry.type === 'Polygon'){
+      out.push({ type:'Feature', geometry:f.geometry, properties:{...f.props, osm_id:f.id, status:f.status} });
+    }
+  });
+  return out;
+}
+
+document.getElementById('downloadShpBtn').addEventListener('click', () => {
+  if(!comparedResults) return;
+  const dl = document.getElementById('downloadStatus');
+  dl.textContent = 'Pripremam shapefile...'; dl.className = 'status-line';
+  try{
+    const features = explodeMultiPolygons(comparedResults.features);
+    const geojson = { type:'FeatureCollection', features };
+    shpwrite.download(geojson, {
+      outputType: 'blob',
+      folder: 'zgrade_status',
+      filename: 'zgrade_status',
+      types: { polygon: 'zgrade_status' },
+    });
+    dl.textContent = `Preuzeto — ${features.length} zapisa (uklj. razdvojene MultiPolygon dijelove).`;
+    dl.className = 'status-line ok';
+  }catch(e){
+    console.error(e);
+    dl.textContent = 'Greška pri generiranju shapefilea: ' + e.message;
+    dl.className = 'status-line err';
+  }
+});
+
+document.getElementById('downloadGeojsonBtn').addEventListener('click', () => {
+  if(!comparedResults) return;
+  const features = comparedResults.features.filter(f => f.geometry).map(f => ({
+    type:'Feature', geometry:f.geometry, properties:{...f.props, osm_id:f.id, status:f.status}
+  }));
+  const geojson = { type:'FeatureCollection', features };
+  const blob = new Blob([JSON.stringify(geojson)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'zgrade_status.geojson';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
 
 const PRIORITY_KEYS = ['building','type','fclass','building:levels','house','roof:shape'];
 let activeFilters = {};
