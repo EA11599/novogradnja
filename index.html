@@ -330,16 +330,23 @@ document.getElementById('compareBtn').addEventListener('click', runComparison);
 
 function findAddress(props){
   // Pokrivamo raznolike konvencije naziva polja (OSM tag stil, shapefile stil s podvlakom, kratice)
-  const get = (patterns) => {
+  const norm = k => k.toLowerCase().replace(/[:_]/g,'');
+  const get = (exactCandidates, substringCandidates) => {
+    // 1. prvo trazimo TOCNO podudaranje (izbjegava lazne pozitivne pri kratkim skracenicama)
     for(const key of Object.keys(props)){
-      const lk = key.toLowerCase().replace(/[:_]/g,'');
-      for(const p of patterns){ if(lk === p || lk.includes(p)) return props[key]; }
+      const nk = norm(key);
+      if(exactCandidates.includes(nk)) return props[key];
+    }
+    // 2. zatim substring podudaranje samo za jednoznacne, dugacke nazive
+    for(const key of Object.keys(props)){
+      const nk = norm(key);
+      for(const p of substringCandidates){ if(nk.includes(p)) return props[key]; }
     }
     return null;
   };
-  const street = get(['addrstreet','street']);
-  const hn = get(['addrhousenumber','addrhn','housenumber']);
-  const city = get(['addrcity','city']) || '';
+  const street = get(['addrstreet','street','addrstr','str'], ['street']);
+  const hn = get(['addrhousenumber','addrhn','housenumber','hn','addrno','no'], ['housenumber']);
+  const city = get(['addrcity','city'], ['city']) || '';
   if(street){
     return [`${street}${hn ? ' ' + hn : ''}`, city].filter(Boolean).join(', ');
   }
