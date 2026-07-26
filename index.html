@@ -121,7 +121,7 @@
   .badge-status{ font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 7px; border-radius:10px; align-self:center; }
   .badge-new{ background:rgba(232,135,30,0.18); color:var(--accent); }
   .badge-existing{ background:rgba(143,211,232,0.1); color:var(--line); }
-  .badge-confirmed{ background:rgba(111,207,151,0.2); color:#6FCF97; }
+  .badge-confirmed{ background:rgba(217,70,239,0.2); color:#D946EF; }
   .badge-unconfirmed{ background:rgba(232,135,30,0.2); color:#E8871E; }
   .details{ display:none; background:rgba(0,0,0,0.2); padding:14px 16px; border-bottom:1px solid var(--line-dim); }
   .details.open{ display:block; }
@@ -218,7 +218,7 @@
         <div class="controls">
           <input type="text" id="searchBox" placeholder="Pretraži po adresi, ulici ili ID-ju..." />
           <label class="chk"><input type="checkbox" id="onlyNew" checked /> Sakrij nepromijenjene</label>
-          <label class="chk"><input type="checkbox" id="catConfirmed" checked /> 🟢 Potvrđena novogradnja</label>
+          <label class="chk"><input type="checkbox" id="catConfirmed" checked /> 🟣 Potvrđena novogradnja</label>
           <label class="chk"><input type="checkbox" id="catUnconfirmed" checked /> 🟠 Novi zapis (nepotvrđeno)</label>
         </div>
         <div class="count-line" id="countLine"></div>
@@ -701,7 +701,7 @@ function buildMapPageHtml(geojson, count){
   parts.push('<div class="info-box">' + count.toLocaleString('hr-HR') + ' zgrada prikazano</div>');
   parts.push(scriptOpen + '>');
   parts.push('const DATA = ' + dataStr + ';');
-  parts.push('function colorFor(p){ if(p.displayCategory === "confirmed_construction") return "#6FCF97"; if(p.displayCategory === "new_unconfirmed") return "#E8871E"; return "#8FD3E8"; }');
+  parts.push('function colorFor(p){ if(p.displayCategory === "confirmed_construction") return "#D946EF"; if(p.displayCategory === "new_unconfirmed") return "#E8871E"; return "#8FD3E8"; }');
   parts.push('const map = L.map("map", { preferCanvas: true });');
   parts.push('L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap suradnici", maxZoom: 19 }).addTo(map);');
   parts.push('const layer = L.geoJSON(DATA, { renderer: L.canvas(),');
