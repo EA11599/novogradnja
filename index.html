@@ -675,16 +675,16 @@ function getFilteredFeatures(){
 
 document.getElementById('showMapBtn').addEventListener('click', () => {
   const dl = document.getElementById('mapStatus');
-  const filtered = getFilteredFeatures().filter(f => f.geometry);
-  if(!filtered.length){
-    dl.textContent = 'Nema zgrada s geometrijom za prikaz (provjeri filtere).';
+  const all = comparedResults ? comparedResults.features.filter(f => f.geometry) : [];
+  if(!all.length){
+    dl.textContent = 'Nema podataka za prikaz. Prvo pokreni usporedbu.';
     dl.className = 'status-line err';
     return;
   }
 
   const geojson = {
     type: 'FeatureCollection',
-    features: filtered.map(f => ({
+    features: all.map(f => ({
       type: 'Feature',
       geometry: f.geometry,
       properties: { id: f.id, status: f.status, address: f.address, nearestStreet: f.nearestStreet,
@@ -692,16 +692,23 @@ document.getElementById('showMapBtn').addEventListener('click', () => {
     })),
   };
 
-  const html = buildMapPageHtml(geojson, filtered.length);
+  const initial = {
+    hideUnchanged: onlyNew.checked,
+    showConfirmed: catConfirmed.checked,
+    showUnconfirmed: catUnconfirmed.checked,
+  };
+
+  const html = buildMapPageHtml(geojson, all.length, initial);
   const blob = new Blob([html], { type: 'text/html' });
   const url = URL.createObjectURL(blob);
   window.open(url, '_blank');
-  dl.textContent = `Otvorena karta s ${filtered.length.toLocaleString('hr-HR')} zgrada.`;
+  dl.textContent = `Otvorena karta s ${all.length.toLocaleString('hr-HR')} zgrada (filteri dostupni na karti).`;
   dl.className = 'status-line ok';
 });
 
-function buildMapPageHtml(geojson, count){
+function buildMapPageHtml(geojson, count, initial){
   const dataStr = JSON.stringify(geojson);
+  const initialStr = JSON.stringify(initial);
   var scriptOpen = '<' + 'script';
   var scriptClose = '<' + '/script>';
   var parts = [];
@@ -709,28 +716,129 @@ function buildMapPageHtml(geojson, count){
   parts.push('<title>Karta - ' + count + ' zgrada</title>');
   parts.push('<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />');
   parts.push(scriptOpen + ' src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js">' + scriptClose);
-  parts.push('<style>html,body,#map{margin:0;padding:0;height:100%;width:100%;font-family:sans-serif;}');
-  parts.push('.info-box{position:absolute;top:10px;left:50px;z-index:1000;background:#14304C;color:#EAF2F8;padding:8px 14px;border-radius:4px;font-family:monospace;font-size:13px;border:1px solid rgba(143,211,232,0.3);}');
-  parts.push('.leaflet-popup-content{font-size:12px;max-width:260px;} .leaflet-popup-content b{color:#c05a00;} .tagrow{font-family:monospace;font-size:11px;color:#444;}</style>');
+  parts.push('<style>');
+  parts.push('html,body,#map{margin:0;padding:0;height:100%;width:100%;font-family:sans-serif;}');
+  parts.push(':root{--bg:#14304C;--line:#8FD3E8;--linedim:rgba(143,211,232,0.25);--accent:#E8871E;--text:#EAF2F8;--muted:#9FB8CC;}');
+  parts.push('.info-box{position:absolute;top:10px;left:50px;z-index:1000;background:var(--bg);color:var(--text);padding:8px 14px;border-radius:4px;font-family:monospace;font-size:13px;border:1px solid var(--linedim);}');
+  parts.push('.filter-panel{position:absolute;top:10px;right:10px;z-index:1000;background:var(--bg);color:var(--text);border:1px solid var(--linedim);border-radius:6px;padding:12px;width:230px;max-height:88vh;overflow-y:auto;font-family:sans-serif;font-size:12px;box-shadow:0 2px 10px rgba(0,0,0,0.4);}');
+  parts.push('.filter-panel h4{margin:0 0 8px;font-size:13px;color:var(--line);}');
+  parts.push('.fp-row{display:flex;align-items:center;gap:6px;margin-bottom:6px;}');
+  parts.push('.fp-logic{display:flex;border:1px solid var(--linedim);border-radius:3px;overflow:hidden;margin:8px 0;}');
+  parts.push('.fp-logic button{flex:1;background:transparent;border:none;color:var(--muted);padding:5px 0;font-size:11px;cursor:pointer;}');
+  parts.push('.fp-logic button.active{background:var(--accent);color:#161616;font-weight:600;}');
+  parts.push('.filter-panel details{margin-bottom:6px;border-bottom:1px solid var(--linedim);padding-bottom:4px;}');
+  parts.push('.filter-panel summary{cursor:pointer;color:var(--line);font-family:monospace;font-size:11px;}');
+  parts.push('.fp-opt{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);padding:2px 0;}');
+  parts.push('.fp-opt span{margin-left:auto;font-family:monospace;}');
+  parts.push('.fp-count{font-family:monospace;font-size:11px;color:var(--muted);margin-top:8px;border-top:1px solid var(--linedim);padding-top:8px;}');
+  parts.push('.leaflet-popup-content{font-size:12px;max-width:260px;} .leaflet-popup-content b{color:#c05a00;} .tagrow{font-family:monospace;font-size:11px;color:#444;}');
+  parts.push('</style>');
   parts.push('</head><body><div id="map"></div>');
-  parts.push('<div class="info-box">' + count.toLocaleString('hr-HR') + ' zgrada prikazano</div>');
+  parts.push('<div class="info-box" id="countBox">' + count.toLocaleString('hr-HR') + ' zgrada prikazano</div>');
+  parts.push('<div class="filter-panel">');
+  parts.push('<h4>Filteri</h4>');
+  parts.push('<div class="fp-row"><label><input type="checkbox" id="mHideUnchanged"> Sakrij nepromijenjene</label></div>');
+  parts.push('<div class="fp-row"><label><input type="checkbox" id="mConfirmed"> \u{1F7E3} Potvrdjena novogradnja</label></div>');
+  parts.push('<div class="fp-row"><label><input type="checkbox" id="mUnconfirmed"> \u{1F7E0} Novi zapis</label></div>');
+  parts.push('<div class="fp-logic"><button id="mLogicAnd" class="active">I (mora sve)</button><button id="mLogicOr">ILI (barem jedno)</button></div>');
+  parts.push('<div id="mFilterGroups"></div>');
+  parts.push('<div class="fp-count" id="fpCount"></div>');
+  parts.push('</div>');
   parts.push(scriptOpen + '>');
   parts.push('const DATA = ' + dataStr + ';');
+  parts.push('const INITIAL = ' + initialStr + ';');
+  parts.push('document.getElementById("mHideUnchanged").checked = INITIAL.hideUnchanged;');
+  parts.push('document.getElementById("mConfirmed").checked = INITIAL.showConfirmed;');
+  parts.push('document.getElementById("mUnconfirmed").checked = INITIAL.showUnconfirmed;');
   parts.push('function colorFor(p){ if(p.displayCategory === "confirmed_construction") return "#D946EF"; if(p.displayCategory === "new_unconfirmed") return "#E8871E"; return "#8FD3E8"; }');
   parts.push('const map = L.map("map", { preferCanvas: true });');
   parts.push('L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap suradnici", maxZoom: 19 }).addTo(map);');
-  parts.push('const layer = L.geoJSON(DATA, { renderer: L.canvas(),');
-  parts.push('  style: function(f){ var c = colorFor(f.properties); var op = f.properties.displayCategory === "existing_unchanged" ? 0.15 : 0.55; return { color: c, weight: 2, fillColor: c, fillOpacity: op }; },');
-  parts.push('  onEachFeature: function(feature, lyr){');
-  parts.push('    var p = feature.properties;');
-  parts.push('    var addrLine = p.address ? p.address : (p.nearestStreet ? ("priblizno " + p.nearestStreetDist + " m od " + p.nearestStreet + " (procjena)") : "adresa nepoznata");');
-  parts.push('    var tagsHtml = "";');
-  parts.push('    for(var k in (p.tags || {})){ tagsHtml += "<div class=\\"tagrow\\">" + k + " = " + p.tags[k] + "</div>"; }');
-  parts.push('    var statusLabel = p.displayCategory === "confirmed_construction" ? "POTVRDJENA NOVOGRADNJA" : p.displayCategory === "new_unconfirmed" ? "NOVI ZAPIS (nepotvrdjeno)" : "postojeca";');
-  parts.push('    lyr.bindPopup("<b>" + statusLabel + "</b><br>" + addrLine + "<br><span style=\\"color:#888\\">" + p.id + "</span><hr style=\\"margin:6px 0;\\">" + tagsHtml);');
-  parts.push('  }');
-  parts.push('}).addTo(map);');
-  parts.push('map.fitBounds(layer.getBounds(), { padding: [30,30] });');
+  parts.push('function styleFn(f){ var c = colorFor(f.properties); var op = f.properties.displayCategory === "existing_unchanged" ? 0.15 : 0.55; return { color: c, weight: 2, fillColor: c, fillOpacity: op }; }');
+  parts.push('function onEachFn(feature, lyr){');
+  parts.push('  var p = feature.properties;');
+  parts.push('  var addrLine = p.address ? p.address : (p.nearestStreet ? ("priblizno " + p.nearestStreetDist + " m od " + p.nearestStreet + " (procjena)") : "adresa nepoznata");');
+  parts.push('  var tagsHtml = "";');
+  parts.push('  for(var k in (p.tags || {})){ tagsHtml += "<div class=\\"tagrow\\">" + k + " = " + p.tags[k] + "</div>"; }');
+  parts.push('  var statusLabel = p.displayCategory === "confirmed_construction" ? "POTVRDJENA NOVOGRADNJA" : p.displayCategory === "new_unconfirmed" ? "NOVI ZAPIS (nepotvrdjeno)" : "postojeca";');
+  parts.push('  lyr.bindPopup("<b>" + statusLabel + "</b><br>" + addrLine + "<br><span style=\\"color:#888\\">" + p.id + "</span><hr style=\\"margin:6px 0;\\">" + tagsHtml);');
+  parts.push('}');
+  parts.push('var PRIORITY_KEYS = ["building","type","fclass","building:levels","house","roof:shape"];');
+  parts.push('var mActiveFilters = {};');
+  parts.push('var mLogicMode = "AND";');
+  parts.push('function buildTagFilterUI(){');
+  parts.push('  var tagCounts = {};');
+  parts.push('  DATA.features.forEach(function(f){');
+  parts.push('    var tags = f.properties.tags || {};');
+  parts.push('    Object.keys(tags).forEach(function(k){');
+  parts.push('      if(k.toLowerCase().indexOf("addr") !== -1) return;');
+  parts.push('      var v = tags[k];');
+  parts.push('      if(v == null || v === "") return;');
+  parts.push('      if(!tagCounts[k]) tagCounts[k] = {};');
+  parts.push('      tagCounts[k][v] = (tagCounts[k][v] || 0) + 1;');
+  parts.push('    });');
+  parts.push('  });');
+  parts.push('  var keys = PRIORITY_KEYS.filter(function(k){ return tagCounts[k]; });');
+  parts.push('  Object.keys(tagCounts).forEach(function(k){');
+  parts.push('    if(PRIORITY_KEYS.indexOf(k) !== -1) return;');
+  parts.push('    var vals = Object.keys(tagCounts[k]).map(function(v){ return tagCounts[k][v]; });');
+  parts.push('    if(vals.some(function(c){ return c >= 3; })) keys.push(k);');
+  parts.push('  });');
+  parts.push('  keys.sort();');
+  parts.push('  var container = document.getElementById("mFilterGroups");');
+  parts.push('  container.innerHTML = "";');
+  parts.push('  keys.slice(0,10).forEach(function(key){');
+  parts.push('    var entries = Object.keys(tagCounts[key]).map(function(v){ return [v, tagCounts[key][v]]; });');
+  parts.push('    entries.sort(function(a,b){ return b[1]-a[1]; });');
+  parts.push('    entries = entries.slice(0,8);');
+  parts.push('    var det = document.createElement("details");');
+  parts.push('    var html = "<summary>" + key + "</summary>";');
+  parts.push('    entries.forEach(function(e){');
+  parts.push('      html += "<label class=\\"fp-opt\\"><input type=\\"checkbox\\" data-key=\\"" + key + "\\" data-val=\\"" + e[0] + "\\"> " + e[0] + " <span>" + e[1] + "</span></label>";');
+  parts.push('    });');
+  parts.push('    det.innerHTML = html;');
+  parts.push('    container.appendChild(det);');
+  parts.push('  });');
+  parts.push('  container.onchange = function(e){');
+  parts.push('    if(e.target.type !== "checkbox") return;');
+  parts.push('    var key = e.target.dataset.key, val = e.target.dataset.val;');
+  parts.push('    if(!mActiveFilters[key]) mActiveFilters[key] = {};');
+  parts.push('    if(e.target.checked) mActiveFilters[key][val] = true; else delete mActiveFilters[key][val];');
+  parts.push('    if(Object.keys(mActiveFilters[key]).length === 0) delete mActiveFilters[key];');
+  parts.push('    renderLayer();');
+  parts.push('  };');
+  parts.push('}');
+  parts.push('function matchesTagFilters(f){');
+  parts.push('  var keys = Object.keys(mActiveFilters);');
+  parts.push('  if(!keys.length) return true;');
+  parts.push('  var tags = f.properties.tags || {};');
+  parts.push('  var checks = keys.map(function(k){ return !!mActiveFilters[k][String(tags[k])]; });');
+  parts.push('  return mLogicMode === "AND" ? checks.every(Boolean) : checks.some(Boolean);');
+  parts.push('}');
+  parts.push('var geoLayer = null;');
+  parts.push('function renderLayer(){');
+  parts.push('  var hideUnchanged = document.getElementById("mHideUnchanged").checked;');
+  parts.push('  var showConfirmed = document.getElementById("mConfirmed").checked;');
+  parts.push('  var showUnconfirmed = document.getElementById("mUnconfirmed").checked;');
+  parts.push('  var filteredFeatures = DATA.features.filter(function(f){');
+  parts.push('    var dc = f.properties.displayCategory;');
+  parts.push('    if(hideUnchanged && dc === "existing_unchanged") return false;');
+  parts.push('    if(dc === "confirmed_construction" && !showConfirmed) return false;');
+  parts.push('    if(dc === "new_unconfirmed" && !showUnconfirmed) return false;');
+  parts.push('    return matchesTagFilters(f);');
+  parts.push('  });');
+  parts.push('  if(geoLayer) map.removeLayer(geoLayer);');
+  parts.push('  geoLayer = L.geoJSON({ type: "FeatureCollection", features: filteredFeatures }, { renderer: L.canvas(), style: styleFn, onEachFeature: onEachFn }).addTo(map);');
+  parts.push('  document.getElementById("countBox").textContent = filteredFeatures.length.toLocaleString("hr-HR") + " zgrada prikazano";');
+  parts.push('  document.getElementById("fpCount").textContent = "Prikazano " + filteredFeatures.length.toLocaleString("hr-HR") + " od " + DATA.features.length.toLocaleString("hr-HR");');
+  parts.push('  if(filteredFeatures.length) map.fitBounds(geoLayer.getBounds(), { padding: [30,30] });');
+  parts.push('}');
+  parts.push('document.getElementById("mHideUnchanged").addEventListener("change", renderLayer);');
+  parts.push('document.getElementById("mConfirmed").addEventListener("change", renderLayer);');
+  parts.push('document.getElementById("mUnconfirmed").addEventListener("change", renderLayer);');
+  parts.push('document.getElementById("mLogicAnd").onclick = function(){ mLogicMode="AND"; document.getElementById("mLogicAnd").className="active"; document.getElementById("mLogicOr").className=""; renderLayer(); };');
+  parts.push('document.getElementById("mLogicOr").onclick = function(){ mLogicMode="OR"; document.getElementById("mLogicOr").className="active"; document.getElementById("mLogicAnd").className=""; renderLayer(); };');
+  parts.push('buildTagFilterUI();');
+  parts.push('renderLayer();');
   parts.push(scriptClose);
   parts.push('</body></html>');
   return parts.join('\n');
