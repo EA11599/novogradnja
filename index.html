@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/shpjs@latest/dist/shp.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mapbox/shp-write@0.3.4/shpwrite.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mapbox/shp-write@0.4.3/shpwrite.js"></script>
 <style>
   :root{
     --bg:#0E2238; --bg-panel:#14304C; --bg-panel-2:#183a5c; --line:#8FD3E8; --line-dim:rgba(143,211,232,0.18);
@@ -531,6 +531,11 @@ function explodeMultiPolygons(features){
 document.getElementById('downloadShpBtn').addEventListener('click', () => {
   if(!comparedResults) return;
   const dl = document.getElementById('downloadStatus');
+  if(typeof shpwrite === 'undefined'){
+    dl.textContent = 'Biblioteka za shapefile nije učitana (provjeri internet vezu ili osvježi stranicu). Koristi "Preuzmi GeoJSON" umjesto toga.';
+    dl.className = 'status-line err';
+    return;
+  }
   dl.textContent = 'Pripremam shapefile...'; dl.className = 'status-line';
   try{
     const features = explodeMultiPolygons(comparedResults.features);
