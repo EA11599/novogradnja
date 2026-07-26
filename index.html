@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/shpjs@latest/dist/shp.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mapbox/shp-write@0.4.3/shpwrite.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   :root{
     --bg:#0E2238; --bg-panel:#14304C; --bg-panel-2:#183a5c; --line:#8FD3E8; --line-dim:rgba(143,211,232,0.18);
@@ -513,7 +513,7 @@ function computeNearestStreets(features, roads){
 /* ---------- Preuzimanje rezultata (shapefile / GeoJSON) ---------- */
 
 function explodeMultiPolygons(features){
-  // shp-write ne podrzava MultiPolygon pouzdano - razbijamo svaki dio u zaseban Polygon zapis
+  // Nas shapefile writer podrzava samo Polygon - MultiPolygon razbijamo u zasebne zapise
   const out = [];
   features.forEach(f => {
     if(!f.geometry) return;
@@ -531,29 +531,190 @@ function explodeMultiPolygons(features){
 document.getElementById('downloadShpBtn').addEventListener('click', () => {
   if(!comparedResults) return;
   const dl = document.getElementById('downloadStatus');
-  if(typeof shpwrite === 'undefined'){
-    dl.textContent = 'Biblioteka za shapefile nije učitana (provjeri internet vezu ili osvježi stranicu). Koristi "Preuzmi GeoJSON" umjesto toga.';
+  if(typeof JSZip === 'undefined'){
+    dl.textContent = 'JSZip nije učitan (provjeri internet vezu ili osvježi stranicu). Koristi "Preuzmi GeoJSON" umjesto toga.';
     dl.className = 'status-line err';
     return;
   }
   dl.textContent = 'Pripremam shapefile...'; dl.className = 'status-line';
   try{
     const features = explodeMultiPolygons(comparedResults.features);
-    const geojson = { type:'FeatureCollection', features };
-    shpwrite.download(geojson, {
-      outputType: 'blob',
-      folder: 'zgrade_status',
-      filename: 'zgrade_status',
-      types: { polygon: 'zgrade_status' },
+    if(!features.length) throw new Error('Nema poligonske geometrije za izvoz.');
+    const { shp, shx, dbf } = buildShapefileBuffers(features);
+    const prj = 'GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]]';
+
+    const zip = new JSZip();
+    zip.file('zgrade_status.shp', shp);
+    zip.file('zgrade_status.shx', shx);
+    zip.file('zgrade_status.dbf', dbf);
+    zip.file('zgrade_status.prj', prj);
+    zip.generateAsync({ type: 'blob' }).then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'zgrade_status.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+      dl.textContent = `Preuzeto — ${features.length} zapisa.`;
+      dl.className = 'status-line ok';
     });
-    dl.textContent = `Preuzeto — ${features.length} zapisa (uklj. razdvojene MultiPolygon dijelove).`;
-    dl.className = 'status-line ok';
   }catch(e){
     console.error(e);
     dl.textContent = 'Greška pri generiranju shapefilea: ' + e.message;
     dl.className = 'status-line err';
   }
 });
+
+/* ---------- Vlastiti minimalni ESRI shapefile writer (Polygon, shape type 5) ---------- */
+
+function buildShapefileBuffers(features){
+  const keySet = new Set(['osm_id', 'status']);
+  features.forEach(f => Object.keys(f.properties).forEach(k => { if(k !== 'osm_id' && k !== 'status') keySet.add(k); }));
+  let keys = [...keySet].slice(0, 16);
+  const dbfNames = [];
+  const usedNames = new Set();
+  keys.forEach(k => {
+    let name = k.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 10).toUpperCase();
+    let base = name, n = 1;
+    while(usedNames.has(name)){ name = (base.slice(0, 8) + '_' + n).slice(0,10); n++; }
+    usedNames.add(name);
+    dbfNames.push(name);
+  });
+  const fieldLen = keys.map(k => {
+    let maxLen = 4;
+    features.forEach(f => { const v = f.properties[k]; if(v != null) maxLen = Math.max(maxLen, String(v).length); });
+    return Math.min(maxLen, 254);
+  });
+
+  let bbox = [Infinity, Infinity, -Infinity, -Infinity];
+  const recordBuffers = features.map(f => buildPolygonRecord(f.geometry, bbox));
+  const shpContentLen = recordBuffers.reduce((s, r) => s + r.byteLength, 0);
+  const shpFileLenWords = (100 + shpContentLen) / 2;
+
+  const shpHeader = buildShpHeader(shpFileLenWords, bbox, 5);
+  const shx = new ArrayBuffer(100 + recordBuffers.length * 8);
+  const shxView = new DataView(shx);
+  writeShxShpHeaderInto(shxView, (100 + recordBuffers.length*8)/2, bbox, 5);
+
+  let offsetWords = 50;
+  const shpParts = [new Uint8Array(shpHeader)];
+  recordBuffers.forEach((rec, i) => {
+    const contentWords = (rec.byteLength - 8) / 2;
+    shxView.setInt32(100 + i*8, offsetWords, false);
+    shxView.setInt32(100 + i*8 + 4, contentWords, false);
+    offsetWords += rec.byteLength / 2;
+    shpParts.push(new Uint8Array(rec));
+  });
+  const shpTotalLen = shpParts.reduce((s,p)=>s+p.byteLength,0);
+  const shpBytes = new Uint8Array(shpTotalLen);
+  let off = 0; shpParts.forEach(p => { shpBytes.set(p, off); off += p.byteLength; });
+
+  const dbf = buildDbf(features, keys, dbfNames, fieldLen);
+
+  return { shp: shpBytes, shx: new Uint8Array(shx), dbf };
+}
+
+function buildShpHeader(fileLenWords, bbox, shapeType){
+  const buf = new ArrayBuffer(100);
+  const v = new DataView(buf);
+  v.setInt32(0, 9994, false);
+  for(let i=4;i<24;i+=4) v.setInt32(i, 0, false);
+  v.setInt32(24, fileLenWords, false);
+  v.setInt32(28, 1000, true);
+  v.setInt32(32, shapeType, true);
+  v.setFloat64(36, bbox[0], true); v.setFloat64(44, bbox[1], true);
+  v.setFloat64(52, bbox[2], true); v.setFloat64(60, bbox[3], true);
+  for(let i=68;i<100;i+=8) v.setFloat64(i, 0, true);
+  return buf;
+}
+function writeShxShpHeaderInto(view, fileLenWords, bbox, shapeType){
+  view.setInt32(0, 9994, false);
+  for(let i=4;i<24;i+=4) view.setInt32(i, 0, false);
+  view.setInt32(24, fileLenWords, false);
+  view.setInt32(28, 1000, true);
+  view.setInt32(32, shapeType, true);
+  view.setFloat64(36, bbox[0], true); view.setFloat64(44, bbox[1], true);
+  view.setFloat64(52, bbox[2], true); view.setFloat64(60, bbox[3], true);
+  for(let i=68;i<100;i+=8) view.setFloat64(i, 0, true);
+}
+
+function buildPolygonRecord(geometry, bboxAccum){
+  const rings = geometry.coordinates;
+  const parts = [];
+  const points = [];
+  let idx = 0;
+  let xmin=Infinity, ymin=Infinity, xmax=-Infinity, ymax=-Infinity;
+  rings.forEach(ring => {
+    parts.push(idx);
+    ring.forEach(([x,y]) => {
+      points.push(x, y);
+      idx++;
+      if(x<xmin) xmin=x; if(x>xmax) xmax=x;
+      if(y<ymin) ymin=y; if(y>ymax) ymax=y;
+    });
+  });
+  if(xmin < bboxAccum[0]) bboxAccum[0]=xmin; if(ymin < bboxAccum[1]) bboxAccum[1]=ymin;
+  if(xmax > bboxAccum[2]) bboxAccum[2]=xmax; if(ymax > bboxAccum[3]) bboxAccum[3]=ymax;
+
+  const numParts = parts.length, numPoints = idx;
+  const contentBytes = 4 + 32 + 4 + 4 + numParts*4 + numPoints*16;
+  const totalBytes = 8 + contentBytes;
+  const buf = new ArrayBuffer(totalBytes);
+  const v = new DataView(buf);
+  v.setInt32(0, 0, false);
+  v.setInt32(4, contentBytes/2, false);
+  let o = 8;
+  v.setInt32(o, 5, true); o+=4;
+  v.setFloat64(o, xmin, true); o+=8; v.setFloat64(o, ymin, true); o+=8;
+  v.setFloat64(o, xmax, true); o+=8; v.setFloat64(o, ymax, true); o+=8;
+  v.setInt32(o, numParts, true); o+=4;
+  v.setInt32(o, numPoints, true); o+=4;
+  parts.forEach(p => { v.setInt32(o, p, true); o+=4; });
+  for(let i=0;i<points.length;i+=2){ v.setFloat64(o, points[i], true); o+=8; v.setFloat64(o, points[i+1], true); o+=8; }
+  return buf;
+}
+
+function buildDbf(features, keys, dbfNames, fieldLen){
+  const numFields = keys.length;
+  const headerLen = 32 + numFields*32 + 1;
+  const recordLen = 1 + fieldLen.reduce((a,b)=>a+b,0);
+  const numRecords = features.length;
+  const totalLen = headerLen + numRecords*recordLen + 1;
+  const buf = new ArrayBuffer(totalLen);
+  const v = new DataView(buf);
+  const bytes = new Uint8Array(buf);
+
+  v.setUint8(0, 0x03);
+  const now = new Date();
+  v.setUint8(1, now.getFullYear()-1900); v.setUint8(2, now.getMonth()+1); v.setUint8(3, now.getDate());
+  v.setUint32(4, numRecords, true);
+  v.setUint16(8, headerLen, true);
+  v.setUint16(10, recordLen, true);
+
+  let o = 32;
+  for(let i=0;i<numFields;i++){
+    const nameBytes = new TextEncoder().encode(dbfNames[i].padEnd(11,'\0').slice(0,11));
+    bytes.set(nameBytes, o);
+    v.setUint8(o+11, 0x43);
+    v.setUint32(o+12, 0, true);
+    v.setUint8(o+16, fieldLen[i]);
+    v.setUint8(o+17, 0);
+    o += 32;
+  }
+  v.setUint8(o, 0x0D); o += 1;
+
+  features.forEach(f => {
+    bytes[o] = 0x20; o += 1;
+    keys.forEach((k, i) => {
+      const raw = f.properties[k];
+      const str = (raw == null ? '' : String(raw)).slice(0, fieldLen[i]).padEnd(fieldLen[i], ' ');
+      const enc = new TextEncoder().encode(str);
+      bytes.set(enc.slice(0, fieldLen[i]), o);
+      o += fieldLen[i];
+    });
+  });
+  bytes[o] = 0x1A;
+  return bytes;
+}
 
 document.getElementById('downloadGeojsonBtn').addEventListener('click', () => {
   if(!comparedResults) return;
