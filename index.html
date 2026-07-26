@@ -187,6 +187,10 @@
         <div class="stat" data-tag="ADRESA/PODACI"><div class="num" id="statAddr">—</div><div class="lbl">novih zgrada s prepoznatom adresom</div></div>
       </div>
       <div class="roads-status" id="roadsStatus"></div>
+      <div class="action-row" style="margin-top:14px;">
+        <button class="btn btn-primary" id="showMapBtn">Označi sve na OSM karti</button>
+        <span class="status-line" id="mapStatus"></span>
+      </div>
       <div id="roadsFallback">
         <div class="desc">Automatski dohvat cesta nije uspio (javni servis je možda trenutno zauzet). Možete ručno učitati shapefile cesta (npr. <code>gis_osm_roads_free_1</code>) da omogućite prikaz najbliže ulice:</div>
         <div class="dropzone" id="dzRoads" style="max-width:400px;">
@@ -598,6 +602,72 @@ function getFilteredFeatures(){
            f.id.toLowerCase().includes(q);
   });
 }
+
+
+/* ---------- Prikaz na karti (novi tab, Leaflet + OSM plocice) ---------- */
+
+document.getElementById('showMapBtn').addEventListener('click', () => {
+  const dl = document.getElementById('mapStatus');
+  const filtered = getFilteredFeatures().filter(f => f.geometry);
+  if(!filtered.length){
+    dl.textContent = 'Nema zgrada s geometrijom za prikaz (provjeri filtere).';
+    dl.className = 'status-line err';
+    return;
+  }
+
+  const geojson = {
+    type: 'FeatureCollection',
+    features: filtered.map(f => ({
+      type: 'Feature',
+      geometry: f.geometry,
+      properties: { id: f.id, status: f.status, address: f.address, nearestStreet: f.nearestStreet,
+        nearestStreetDist: f.nearestStreetDist, tags: f.props },
+    })),
+  };
+
+  const html = buildMapPageHtml(geojson, filtered.length);
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+  dl.textContent = `Otvorena karta s ${filtered.length.toLocaleString('hr-HR')} zgrada.`;
+  dl.className = 'status-line ok';
+});
+
+function buildMapPageHtml(geojson, count){
+  const dataStr = JSON.stringify(geojson);
+  var scriptOpen = '<' + 'script';
+  var scriptClose = '<' + '/script>';
+  var parts = [];
+  parts.push('<!DOCTYPE html><html lang="hr"><head><meta charset="UTF-8" />');
+  parts.push('<title>Karta - ' + count + ' zgrada</title>');
+  parts.push('<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />');
+  parts.push(scriptOpen + ' src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js">' + scriptClose);
+  parts.push('<style>html,body,#map{margin:0;padding:0;height:100%;width:100%;font-family:sans-serif;}');
+  parts.push('.info-box{position:absolute;top:10px;left:50px;z-index:1000;background:#14304C;color:#EAF2F8;padding:8px 14px;border-radius:4px;font-family:monospace;font-size:13px;border:1px solid rgba(143,211,232,0.3);}');
+  parts.push('.leaflet-popup-content{font-size:12px;max-width:260px;} .leaflet-popup-content b{color:#c05a00;} .tagrow{font-family:monospace;font-size:11px;color:#444;}</style>');
+  parts.push('</head><body><div id="map"></div>');
+  parts.push('<div class="info-box">' + count.toLocaleString('hr-HR') + ' zgrada prikazano</div>');
+  parts.push(scriptOpen + '>');
+  parts.push('const DATA = ' + dataStr + ';');
+  parts.push('const map = L.map("map", { preferCanvas: true });');
+  parts.push('L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap suradnici", maxZoom: 19 }).addTo(map);');
+  parts.push('const layer = L.geoJSON(DATA, { renderer: L.canvas(),');
+  parts.push('  style: function(f){ return { color: f.properties.status === "new" ? "#E8871E" : "#8FD3E8", weight: 2, fillColor: f.properties.status === "new" ? "#E8871E" : "#8FD3E8", fillOpacity: f.properties.status === "new" ? 0.55 : 0.15 }; },');
+  parts.push('  onEachFeature: function(feature, lyr){');
+  parts.push('    var p = feature.properties;');
+  parts.push('    var addrLine = p.address ? p.address : (p.nearestStreet ? ("priblizno " + p.nearestStreetDist + " m od " + p.nearestStreet + " (procjena)") : "adresa nepoznata");');
+  parts.push('    var tagsHtml = "";');
+  parts.push('    for(var k in (p.tags || {})){ tagsHtml += "<div class=\\"tagrow\\">" + k + " = " + p.tags[k] + "</div>"; }');
+  parts.push('    var statusLabel = p.status === "new" ? "NOVA ZGRADA" : "postojeca";');
+  parts.push('    lyr.bindPopup("<b>" + statusLabel + "</b><br>" + addrLine + "<br><span style=\\"color:#888\\">" + p.id + "</span><hr style=\\"margin:6px 0;\\">" + tagsHtml);');
+  parts.push('  }');
+  parts.push('}).addTo(map);');
+  parts.push('map.fitBounds(layer.getBounds(), { padding: [30,30] });');
+  parts.push(scriptClose);
+  parts.push('</body></html>');
+  return parts.join('\n');
+}
+
 
 function render(){
   if(!comparedResults) return;
