@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/shpjs@latest/dist/shp.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg:#0E2238; --bg-panel:#14304C; --bg-panel-2:#183a5c; --line:#8FD3E8; --line-dim:rgba(143,211,232,0.18);
@@ -188,6 +189,7 @@
       <div class="roads-status" id="roadsStatus"></div>
       <div class="action-row" style="margin-top:14px;">
         <button class="btn btn-primary" id="showMapBtn">Označi sve na OSM karti</button>
+        <button class="btn btn-ghost" id="exportExcelBtn">Preuzmi Excel (sve nove zgrade)</button>
         <span class="status-line" id="mapStatus"></span>
       </div>
       <div id="roadsFallback">
@@ -496,7 +498,7 @@ async function runComparison(){
   setStatus(`Gotovo. ${newCount} novih zgrada.`, 'ok');
   document.getElementById('compareBtn').disabled = false;
 
-  buildFilters(features);
+  buildFilters(features.filter(f => f.displayCategory !== 'existing_unchanged'));
   render();
 
   // Pokusaj automatskog dohvata cesta za "najblizu ulicu" (samo za nove zgrade bez adrese)
@@ -725,6 +727,48 @@ document.getElementById('showMapBtn').addEventListener('click', () => {
   dl.className = 'status-line ok';
 });
 
+
+document.getElementById('exportExcelBtn').addEventListener('click', () => {
+  const dl = document.getElementById('mapStatus');
+  if(typeof XLSX === 'undefined'){
+    dl.textContent = 'Excel biblioteka nije učitana (provjeri internet vezu ili osvježi stranicu).';
+    dl.className = 'status-line err';
+    return;
+  }
+  if(!comparedResults){
+    dl.textContent = 'Prvo pokreni usporedbu.';
+    dl.className = 'status-line err';
+    return;
+  }
+  const features = comparedResults.features.filter(f => f.displayCategory !== 'existing_unchanged');
+  if(!features.length){
+    dl.textContent = 'Nema novih zgrada za izvoz.';
+    dl.className = 'status-line err';
+    return;
+  }
+
+  const keySet = new Set();
+  features.forEach(f => Object.keys(f.props || {}).forEach(k => keySet.add(k)));
+  const keys = [...keySet];
+
+  const rows = features.map(f => {
+    const row = {
+      osm_id: f.id,
+      kategorija: f.displayCategory === 'confirmed_construction' ? 'Potvrđena novogradnja' : 'Novi zapis (nepotvrđeno)',
+    };
+    keys.forEach(k => { row[k] = (f.props[k] != null) ? f.props[k] : ''; });
+    row.google_maps = (f.lat != null) ? `https://www.google.com/maps?q=${f.lat},${f.lon}` : '';
+    return row;
+  });
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Nove zgrade');
+  XLSX.writeFile(wb, 'nove_zgrade.xlsx');
+
+  dl.textContent = `Excel preuzet — ${rows.length.toLocaleString('hr-HR')} redaka.`;
+  dl.className = 'status-line ok';
+});
 function buildMapPageHtml(geojson, count, initial){
   const dataStr = JSON.stringify(geojson);
   const initialStr = JSON.stringify(initial);
@@ -887,7 +931,7 @@ function render(){
     else if(f.displayCategory === 'new_unconfirmed') badge = '<span class="badge-status badge-unconfirmed">NOVI ZAPIS (nepotvrđeno)</span>';
     else badge = '<span class="badge-status badge-existing">postojeća</span>';
     const tagsHtml = Object.entries(f.props||{}).map(([k,v]) => `<div class="tag"><span>${k}</span> = ${v}</div>`).join('');
-    const mapLink = (f.lat != null) ? `<a href="https://www.openstreetmap.org/?mlat=${f.lat}&mlon=${f.lon}#map=19/${f.lat}/${f.lon}" target="_blank" rel="noopener">Otvori na OSM karti ↗</a>` : '';
+    const mapLink = (f.lat != null) ? `<a href="https://www.google.com/maps?q=${f.lat},${f.lon}" target="_blank" rel="noopener">Otvori u Google Maps ↗</a>` : '';
     return `
       <div class="row" onclick="document.getElementById('d-${idx}').classList.toggle('open')">
         ${addrHtml}
