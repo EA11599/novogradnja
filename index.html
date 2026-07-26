@@ -757,11 +757,22 @@ document.getElementById('exportExcelBtn').addEventListener('click', () => {
       kategorija: f.displayCategory === 'confirmed_construction' ? 'Potvrđena novogradnja' : 'Novi zapis (nepotvrđeno)',
     };
     keys.forEach(k => { row[k] = (f.props[k] != null) ? f.props[k] : ''; });
-    row.google_maps = (f.lat != null) ? `https://www.google.com/maps?q=${f.lat},${f.lon}` : '';
+    row.link = (f.lat != null) ? `https://www.google.com/maps?q=${f.lat},${f.lon}` : '';
     return row;
   });
 
   const ws = XLSX.utils.json_to_sheet(rows);
+  const headers = Object.keys(rows[0] || {});
+  const linkColIndex = headers.indexOf('link');
+  if(linkColIndex !== -1){
+    rows.forEach((row, i) => {
+      if(!row.link) return;
+      const cellRef = XLSX.utils.encode_cell({ r: i + 1, c: linkColIndex });
+      if(ws[cellRef]){
+        ws[cellRef].l = { Target: row.link, Tooltip: 'Otvori u Google Maps' };
+      }
+    });
+  }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Nove zgrade');
   XLSX.writeFile(wb, 'nove_zgrade.xlsx');
