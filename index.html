@@ -325,7 +325,27 @@ dateNewSelect.addEventListener('change', checkReady);
 
 function checkReady(){
   const oldVal = dateOldSelect.value, newVal = dateNewSelect.value;
-  document.getElementById('compareBtn').disabled = !(oldVal && newVal && oldVal !== newVal);
+  const btn = document.getElementById('compareBtn');
+
+  if(!oldVal || !newVal){
+    btn.disabled = true;
+    setStatus('', '');
+    return;
+  }
+  if(oldVal === newVal){
+    btn.disabled = true;
+    setStatus('Stariji i noviji snimak ne mogu biti isti datum.', 'err');
+    return;
+  }
+  const oldSnap = manifest.snapshots.find(s => s.file === oldVal);
+  const newSnap = manifest.snapshots.find(s => s.file === newVal);
+  if(oldSnap && newSnap && oldSnap.date >= newSnap.date){
+    btn.disabled = true;
+    setStatus('"Noviji snimak" mora biti kasniji datum od "Starijeg snimka".', 'err');
+    return;
+  }
+  btn.disabled = false;
+  setStatus('', '');
 }
 
 loadManifest();
