@@ -149,21 +149,17 @@
   </div>
 
   <div class="panel" id="uploadPanel">
-    <h2>1. Učitaj dva shapefile snimka</h2>
-    <div class="desc">Svaki shapefile treba biti zapakiran kao .zip (mora sadržavati .shp, .shx, .dbf, po mogućnosti i .prj).</div>
+    <h2>1. Odaberi dva datuma za usporedbu</h2>
+    <div class="desc">Snimci se automatski učitavaju iz pripremljene arhive — ne treba ništa uploadati.</div>
 
     <div class="dropzones">
-      <div class="dropzone" id="dzOld">
+      <div class="dropzone" id="dzOld" style="cursor:default;">
         <div class="tag">Stariji snimak</div>
-        <div class="fname" id="fnameOld">Klikni ili povuci .zip ovdje</div>
-        <div class="hint">npr. zgrade-2026-01-01.zip</div>
-        <input type="file" id="fileOld" accept=".zip" />
+        <select id="dateOldSelect" style="width:100%; margin-top:8px; background:var(--bg); border:1px solid var(--line-dim); color:var(--text); padding:8px; font-family:'IBM Plex Mono',monospace; font-size:13px; border-radius:2px;"></select>
       </div>
-      <div class="dropzone" id="dzNew">
+      <div class="dropzone" id="dzNew" style="cursor:default;">
         <div class="tag">Noviji snimak</div>
-        <div class="fname" id="fnameNew">Klikni ili povuci .zip ovdje</div>
-        <div class="hint">npr. zgrade-2026-07-25.zip</div>
-        <input type="file" id="fileNew" accept=".zip" />
+        <select id="dateNewSelect" style="width:100%; margin-top:8px; background:var(--bg); border:1px solid var(--line-dim); color:var(--text); padding:8px; font-family:'IBM Plex Mono',monospace; font-size:13px; border-radius:2px;"></select>
       </div>
     </div>
 
@@ -178,6 +174,7 @@
       <span class="status-line" id="statusLine"></span>
     </div>
   </div>
+
 
   <div id="results">
     <div class="panel" style="margin-bottom:20px;">
@@ -288,49 +285,51 @@ function guessIdField(keys){
   return keys[0] || null;
 }
 
-/* ---------- Upload handling ---------- */
+/* ---------- Ucitavanje popisa dostupnih pripremljenih snimaka ---------- */
 
-setupDropzone('dzOld','fileOld','fnameOld', async (file) => {
-  setStatus('Učitavam stariji shapefile...');
+let manifest = null;
+const dateOldSelect = document.getElementById('dateOldSelect');
+const dateNewSelect = document.getElementById('dateNewSelect');
+
+async function loadManifest(){
   try{
-    oldGeojson = await parseShapefileZip(file);
-    setStatus(`Stariji snimak: ${oldGeojson.features.length} objekata učitano.`, 'ok');
-    maybeShowFieldPicker();
+    const res = await fetch('data/manifest.json', { cache: 'no-store' });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    manifest = await res.json();
+    const opts = manifest.snapshots.map(s => `<option value="${s.file}">${s.label}</option>`).join('');
+    dateOldSelect.innerHTML = opts;
+    dateNewSelect.innerHTML = opts;
+    dateOldSelect.selectedIndex = 0;
+    dateNewSelect.selectedIndex = manifest.snapshots.length - 1;
     checkReady();
+    setStatus(`Dostupno ${manifest.snapshots.length} pripremljenih snimaka.`, 'ok');
   }catch(e){
-    setStatus('Greška pri čitanju starijeg shapefilea: ' + e.message, 'err');
+    setStatus('Greška pri učitavanju popisa dostupnih snimaka: ' + e.message, 'err');
     console.error(e);
   }
-});
-
-setupDropzone('dzNew','fileNew','fnameNew', async (file) => {
-  setStatus('Učitavam noviji shapefile...');
-  try{
-    newGeojson = await parseShapefileZip(file);
-    setStatus(`Noviji snimak: ${newGeojson.features.length} objekata učitano.`, 'ok');
-    maybeShowFieldPicker();
-    checkReady();
-  }catch(e){
-    setStatus('Greška pri čitanju novijeg shapefilea: ' + e.message, 'err');
-    console.error(e);
-  }
-});
-
-function maybeShowFieldPicker(){
-  if(!newGeojson) return;
-  const keys = collectPropertyKeys(newGeojson);
-  const select = document.getElementById('idFieldSelect');
-  select.innerHTML = keys.map(k => `<option value="${k}">${k}</option>`).join('');
-  const guess = guessIdField(keys);
-  if(guess) select.value = guess;
-  idField = select.value;
-  select.onchange = () => { idField = select.value; };
-  document.getElementById('fieldPicker').style.display = 'flex';
 }
+
+async function fetchShapefileZip(path){
+  const res = await fetch(path);
+  if(!res.ok) throw new Error('HTTP ' + res.status + ' za ' + path);
+  const buf = await res.arrayBuffer();
+  const result = await shp(buf);
+  if(Array.isArray(result)){
+    result.sort((a,b) => (b.features?.length||0) - (a.features?.length||0));
+    return result[0];
+  }
+  return result;
+}
+
+dateOldSelect.addEventListener('change', checkReady);
+dateNewSelect.addEventListener('change', checkReady);
 
 function checkReady(){
-  document.getElementById('compareBtn').disabled = !(oldGeojson && newGeojson);
+  const oldVal = dateOldSelect.value, newVal = dateNewSelect.value;
+  document.getElementById('compareBtn').disabled = !(oldVal && newVal && oldVal !== newVal);
 }
+
+loadManifest();
 
 document.getElementById('compareBtn').addEventListener('click', runComparison);
 
@@ -433,8 +432,23 @@ function classifyByConstructionTag(features, oldGeojsonData, idFieldName){
 }
 
 async function runComparison(){
-  setStatus('Uspoređujem...', '');
+  setStatus('Dohvaćam odabrane snimke...', '');
   document.getElementById('compareBtn').disabled = true;
+
+  try{
+    oldGeojson = await fetchShapefileZip(dateOldSelect.value);
+    newGeojson = await fetchShapefileZip(dateNewSelect.value);
+  }catch(e){
+    setStatus('Greška pri dohvaćanju pripremljenih snimaka: ' + e.message, 'err');
+    console.error(e);
+    document.getElementById('compareBtn').disabled = false;
+    return;
+  }
+
+  const keys = collectPropertyKeys(newGeojson);
+  idField = guessIdField(keys);
+
+  setStatus('Uspoređujem...', '');
 
   const oldIds = new Set(oldGeojson.features.map(f => String(f.properties[idField])));
 
@@ -461,6 +475,7 @@ async function runComparison(){
   document.getElementById('results').style.display = 'block';
   document.getElementById('results').scrollIntoView({ behavior:'smooth' });
   setStatus(`Gotovo. ${newCount} novih zgrada.`, 'ok');
+  document.getElementById('compareBtn').disabled = false;
 
   buildFilters(features);
   render();
