@@ -547,7 +547,7 @@ function buildMapPageHtml(geojson, count){
 <meta charset="UTF-8" />
 <title>Karta — ${count} zgrada</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"><\/script>
 <style>
   html,body,#map{ margin:0; padding:0; height:100%; width:100%; font-family:sans-serif; }
   .info-box{
@@ -588,7 +588,7 @@ function buildMapPageHtml(geojson, count){
   }).addTo(map);
 
   map.fitBounds(layer.getBounds(), { padding: [30,30] });
-</script>
+<\/script>
 </body>
 </html>`;
 }
