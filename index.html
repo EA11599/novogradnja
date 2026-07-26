@@ -121,6 +121,9 @@
   .badge-status{ font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 7px; border-radius:10px; align-self:center; }
   .badge-new{ background:rgba(232,135,30,0.18); color:var(--accent); }
   .badge-existing{ background:rgba(143,211,232,0.1); color:var(--line); }
+  .badge-novogradnja{ background:rgba(232,93,93,0.2); color:#E85D5D; }
+  .badge-obnova{ background:rgba(232,135,30,0.2); color:#E8871E; }
+  .badge-remap{ background:rgba(240,208,96,0.2); color:#F0D060; }
   .details{ display:none; background:rgba(0,0,0,0.2); padding:14px 16px; border-bottom:1px solid var(--line-dim); }
   .details.open{ display:block; }
   .details .tag{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--text-muted); margin-bottom:3px; }
@@ -216,6 +219,9 @@
         <div class="controls">
           <input type="text" id="searchBox" placeholder="Pretraži po adresi, ulici ili ID-ju..." />
           <label class="chk"><input type="checkbox" id="onlyNew" checked /> Samo nove zgrade</label>
+          <label class="chk"><input type="checkbox" id="catNovogradnja" checked /> 🔴 Novogradnja</label>
+          <label class="chk"><input type="checkbox" id="catObnova" checked /> 🟠 Moguća obnova?</label>
+          <label class="chk"><input type="checkbox" id="catRemap" checked /> 🟡 Remap?</label>
         </div>
         <div class="count-line" id="countLine"></div>
         <div class="list" id="list"></div>
@@ -388,6 +394,98 @@ function centroidOf(geometry){
   return [lat / pts.length, lon / pts.length];
 }
 
+/* ---------- Provjera "stvarna novogradnja vs. re-mapiranje" preko preklapanja geometrije (IoU) ---------- */
+
+function bboxOfGeometry(geom){
+  let xmin=Infinity,ymin=Infinity,xmax=-Infinity,ymax=-Infinity;
+  function walk(c,d){
+    if(d===0){ const x=c[0],y=c[1]; if(x<xmin)xmin=x; if(x>xmax)xmax=x; if(y<ymin)ymin=y; if(y>ymax)ymax=y; }
+    else c.forEach(cc=>walk(cc,d-1));
+  }
+  const depth = geom.type==='Polygon'?2:geom.type==='MultiPolygon'?3:0;
+  walk(geom.coordinates, depth);
+  return [xmin,ymin,xmax,ymax];
+}
+function pointInRing(pt, ring){
+  let x=pt[0], y=pt[1], inside=false;
+  for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+    const xi=ring[i][0], yi=ring[i][1], xj=ring[j][0], yj=ring[j][1];
+    const intersect = ((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/(yj-yi)+xi);
+    if(intersect) inside=!inside;
+  }
+  return inside;
+}
+function pointInPolygonGeom(pt, geom){
+  let rings;
+  if(geom.type === 'Polygon') rings = geom.coordinates;
+  else if(geom.type === 'MultiPolygon') rings = geom.coordinates[0];
+  else return false;
+  if(!rings || !rings[0]) return false;
+  if(!pointInRing(pt, rings[0])) return false;
+  for(let i=1;i<rings.length;i++){ if(pointInRing(pt, rings[i])) return false; }
+  return true;
+}
+function iouApprox(geomA, geomB, gridSize){
+  const bA = bboxOfGeometry(geomA), bB = bboxOfGeometry(geomB);
+  const xmin = Math.min(bA[0],bB[0]), ymin=Math.min(bA[1],bB[1]);
+  const xmax = Math.max(bA[2],bB[2]), ymax=Math.max(bA[3],bB[3]);
+  if(xmax<=xmin || ymax<=ymin) return 0;
+  let inA=0, inB=0, inBoth=0;
+  const stepX=(xmax-xmin)/gridSize, stepY=(ymax-ymin)/gridSize;
+  for(let i=0;i<gridSize;i++){
+    for(let j=0;j<gridSize;j++){
+      const px = xmin + (i+0.5)*stepX, py = ymin + (j+0.5)*stepY;
+      const a = pointInPolygonGeom([px,py], geomA);
+      const b = pointInPolygonGeom([px,py], geomB);
+      if(a) inA++; if(b) inB++; if(a&&b) inBoth++;
+    }
+  }
+  const union = inA + inB - inBoth;
+  if(union === 0) return 0;
+  return inBoth/union;
+}
+
+function classifyNewBuildings(features, oldGeojsonData, idFieldName){
+  const newIdSet = new Set(features.map(f => f.id));
+  const disappeared = oldGeojsonData.features
+    .filter(f => !newIdSet.has(String(f.properties[idFieldName])))
+    .map(f => {
+      const [lat, lon] = centroidOf(f.geometry);
+      return { geometry: f.geometry, lat, lon };
+    })
+    .filter(d => d.lat != null);
+
+  const CELL = 0.002; // ~200m
+  const grid = {};
+  const key = (lat,lon) => Math.floor(lat/CELL) + '_' + Math.floor(lon/CELL);
+  disappeared.forEach(d => {
+    const k = key(d.lat, d.lon);
+    if(!grid[k]) grid[k] = [];
+    grid[k].push(d);
+  });
+
+  features.forEach(f => {
+    if(f.status !== 'new' || f.lat == null) return;
+    const cLat = Math.floor(f.lat/CELL), cLon = Math.floor(f.lon/CELL);
+    let candidates = [];
+    for(let dl=-1; dl<=1; dl++){
+      for(let dn=-1; dn<=1; dn++){
+        const k = (cLat+dl) + '_' + (cLon+dn);
+        if(grid[k]) candidates = candidates.concat(grid[k]);
+      }
+    }
+    let bestIoU = 0;
+    candidates.forEach(c => {
+      const iou = iouApprox(f.geometry, c.geometry, 8);
+      if(iou > bestIoU) bestIoU = iou;
+    });
+    f.iou = bestIoU;
+    if(bestIoU === 0) f.buildStatus = 'novogradnja';
+    else if(bestIoU < 0.5) f.buildStatus = 'moguca_obnova';
+    else f.buildStatus = 'remap';
+  });
+}
+
 async function runComparison(){
   setStatus('Uspoređujem...', '');
   document.getElementById('compareBtn').disabled = true;
@@ -403,6 +501,8 @@ async function runComparison(){
 
   const newCount = features.filter(f => f.status === 'new').length;
   const withAddr = features.filter(f => f.status === 'new' && f.address).length;
+
+  classifyNewBuildings(features, oldGeojson, idField);
 
   comparedResults = { features };
 
@@ -586,8 +686,14 @@ function matchesFilters(f){
 
 const searchBox = document.getElementById('searchBox');
 const onlyNew = document.getElementById('onlyNew');
+const catNovogradnja = document.getElementById('catNovogradnja');
+const catObnova = document.getElementById('catObnova');
+const catRemap = document.getElementById('catRemap');
 searchBox.addEventListener('input', render);
 onlyNew.addEventListener('change', render);
+catNovogradnja.addEventListener('change', render);
+catObnova.addEventListener('change', render);
+catRemap.addEventListener('change', render);
 
 function getFilteredFeatures(){
   if(!comparedResults) return [];
@@ -595,6 +701,11 @@ function getFilteredFeatures(){
   const filterNew = onlyNew.checked;
   return comparedResults.features.filter(f => {
     if(filterNew && f.status !== 'new') return false;
+    if(f.status === 'new'){
+      if(f.buildStatus === 'novogradnja' && !catNovogradnja.checked) return false;
+      if(f.buildStatus === 'moguca_obnova' && !catObnova.checked) return false;
+      if(f.buildStatus === 'remap' && !catRemap.checked) return false;
+    }
     if(!matchesFilters(f)) return false;
     if(!q) return true;
     return (f.address && f.address.toLowerCase().includes(q)) ||
@@ -621,7 +732,7 @@ document.getElementById('showMapBtn').addEventListener('click', () => {
       type: 'Feature',
       geometry: f.geometry,
       properties: { id: f.id, status: f.status, address: f.address, nearestStreet: f.nearestStreet,
-        nearestStreetDist: f.nearestStreetDist, tags: f.props },
+        nearestStreetDist: f.nearestStreetDist, buildStatus: f.buildStatus, tags: f.props },
     })),
   };
 
@@ -649,16 +760,17 @@ function buildMapPageHtml(geojson, count){
   parts.push('<div class="info-box">' + count.toLocaleString('hr-HR') + ' zgrada prikazano</div>');
   parts.push(scriptOpen + '>');
   parts.push('const DATA = ' + dataStr + ';');
+  parts.push('function colorFor(p){ if(p.status !== "new") return "#8FD3E8"; if(p.buildStatus === "novogradnja") return "#E85D5D"; if(p.buildStatus === "moguca_obnova") return "#E8871E"; if(p.buildStatus === "remap") return "#F0D060"; return "#E8871E"; }');
   parts.push('const map = L.map("map", { preferCanvas: true });');
   parts.push('L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap suradnici", maxZoom: 19 }).addTo(map);');
   parts.push('const layer = L.geoJSON(DATA, { renderer: L.canvas(),');
-  parts.push('  style: function(f){ return { color: f.properties.status === "new" ? "#E8871E" : "#8FD3E8", weight: 2, fillColor: f.properties.status === "new" ? "#E8871E" : "#8FD3E8", fillOpacity: f.properties.status === "new" ? 0.55 : 0.15 }; },');
+  parts.push('  style: function(f){ var c = colorFor(f.properties); return { color: c, weight: 2, fillColor: c, fillOpacity: f.properties.status === "new" ? 0.55 : 0.15 }; },');
   parts.push('  onEachFeature: function(feature, lyr){');
   parts.push('    var p = feature.properties;');
   parts.push('    var addrLine = p.address ? p.address : (p.nearestStreet ? ("priblizno " + p.nearestStreetDist + " m od " + p.nearestStreet + " (procjena)") : "adresa nepoznata");');
   parts.push('    var tagsHtml = "";');
   parts.push('    for(var k in (p.tags || {})){ tagsHtml += "<div class=\\"tagrow\\">" + k + " = " + p.tags[k] + "</div>"; }');
-  parts.push('    var statusLabel = p.status === "new" ? "NOVA ZGRADA" : "postojeca";');
+  parts.push('    var statusLabel = p.status !== "new" ? "postojeca" : (p.buildStatus === "novogradnja" ? "NOVOGRADNJA" : p.buildStatus === "moguca_obnova" ? "MOGUCA OBNOVA?" : p.buildStatus === "remap" ? "REMAP?" : "NOVA ZGRADA");');
   parts.push('    lyr.bindPopup("<b>" + statusLabel + "</b><br>" + addrLine + "<br><span style=\\"color:#888\\">" + p.id + "</span><hr style=\\"margin:6px 0;\\">" + tagsHtml);');
   parts.push('  }');
   parts.push('}).addTo(map);');
@@ -687,7 +799,15 @@ function render(){
     if(f.address) addrHtml = `<span class="addr">${f.address}</span>`;
     else if(f.nearestStreet) addrHtml = `<span class="addr unknown">adresa nepoznata</span><span class="nearstreet">≈ ${f.nearestStreetDist} m od: ${f.nearestStreet} (procjena)</span>`;
     else addrHtml = `<span class="addr unknown">adresa nepoznata</span>`;
-    const badge = f.status === 'new' ? '<span class="badge-status badge-new">NOVO</span>' : '<span class="badge-status badge-existing">postojeća</span>';
+    let badge;
+    if(f.status === 'new'){
+      if(f.buildStatus === 'novogradnja') badge = '<span class="badge-status badge-novogradnja">NOVOGRADNJA</span>';
+      else if(f.buildStatus === 'moguca_obnova') badge = '<span class="badge-status badge-obnova">MOGUĆA OBNOVA?</span>';
+      else if(f.buildStatus === 'remap') badge = '<span class="badge-status badge-remap">REMAP?</span>';
+      else badge = '<span class="badge-status badge-new">NOVO</span>';
+    } else {
+      badge = '<span class="badge-status badge-existing">postojeća</span>';
+    }
     const tagsHtml = Object.entries(f.props||{}).map(([k,v]) => `<div class="tag"><span>${k}</span> = ${v}</div>`).join('');
     const mapLink = (f.lat != null) ? `<a href="https://www.openstreetmap.org/?mlat=${f.lat}&mlon=${f.lon}#map=19/${f.lat}/${f.lon}" target="_blank" rel="noopener">Otvori na OSM karti ↗</a>` : '';
     return `
