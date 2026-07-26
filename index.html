@@ -296,13 +296,12 @@ async function loadManifest(){
     const res = await fetch('data/manifest.json', { cache: 'no-store' });
     if(!res.ok) throw new Error('HTTP ' + res.status);
     manifest = await res.json();
-    const opts = manifest.snapshots.map(s => `<option value="${s.file}">${s.label}</option>`).join('');
+    const opts = '<option value="">-- odaberi datum --</option>' +
+      manifest.snapshots.map(s => `<option value="${s.file}">${s.label}</option>`).join('');
     dateOldSelect.innerHTML = opts;
     dateNewSelect.innerHTML = opts;
-    dateOldSelect.selectedIndex = 0;
-    dateNewSelect.selectedIndex = manifest.snapshots.length - 1;
     checkReady();
-    setStatus(`Dostupno ${manifest.snapshots.length} pripremljenih snimaka.`, 'ok');
+    setStatus(`Dostupno ${manifest.snapshots.length} pripremljenih snimaka — odaberi oba datuma.`, 'ok');
   }catch(e){
     setStatus('Greška pri učitavanju popisa dostupnih snimaka: ' + e.message, 'err');
     console.error(e);
